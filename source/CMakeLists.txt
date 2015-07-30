@@ -1,9 +1,15 @@
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -std=c99 -Wall -Wextra -pedantic")
 
 add_executable(ntfsrec
-    ntfs_command.h
-    ntfs_command.c
-
+    ntfsrec_utility.h
+    ntfsrec_utility.c
+    
+    ntfsrec_command.h
+    ntfsrec_command.c
+    ntfsrec_command_ls.c
+    ntfsrec_command_cd.c
+    ntfsrec_command_cp.c
+    
     ntfs_reader.h
     ntfs_reader.c
 

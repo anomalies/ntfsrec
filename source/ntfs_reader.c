@@ -48,6 +48,47 @@ void ntfsrec_reader_release(struct ntfsrec_reader *reader) {
     }
 }
 
+int ntfsrec_reader_get_file_meta(struct ntfsrec_reader *reader, MFT_REF node_ref, int is_dir, struct ntfsrec_file_meta *meta) {
+    ntfs_inode *inode;
+    int result = NR_FALSE;
+    
+    inode = ntfs_inode_open(reader->mount.volume, node_ref);
+    
+    if (inode != NULL) {
+        ntfs_attr_search_ctx *search_ctx;
+        
+        search_ctx = ntfs_attr_get_search_ctx(inode, NULL);
+        
+        if (search_ctx != NULL) {
+            if (ntfs_attr_lookup(AT_FILE_NAME, AT_UNNAMED, 0, 0, 0, NULL, 0, search_ctx) == 0) {
+                FILE_NAME_ATTR *filename_attr;
+                
+                filename_attr = (FILE_NAME_ATTR *)((char *)search_ctx->attr + le16_to_cpu(search_ctx->attr->value_offset));
+                
+                if (filename_attr != NULL) {
+                    meta->created = ntfs2timespec(filename_attr->creation_time);
+                    meta->modified = ntfs2timespec(filename_attr->last_data_change_time);
+                    meta->flags = filename_attr->file_attributes;
+                    
+                    result = NR_TRUE;
+                }
+            }
+            
+            if (!is_dir && ntfs_attr_lookup(AT_DATA, AT_UNNAMED, 0, 0, 0, NULL, 0, search_ctx) == 0) {
+                meta->size = ntfs_get_attribute_value_length(search_ctx->attr);
+                
+                result = NR_TRUE;
+            }
+            
+            ntfs_attr_put_search_ctx(search_ctx);
+        }
+
+        ntfs_inode_close(inode);
+    }
+    
+    return result;
+}
+
 static int ntfsrec_reader_test_device(struct ntfsrec_reader *reader, const char *device_name, unsigned int options) {
     struct stat stat_result;
     
@@ -66,7 +107,7 @@ static int ntfsrec_reader_test_device(struct ntfsrec_reader *reader, const char 
     }
     
     if ((options & NR_MOUNT_OPTION_IGNORE_PREMOUNT) == 0) {
-        unsigned int flags = 0;
+        long unsigned int flags = 0;
         
         if (ntfs_check_if_mounted(device_name, &flags) != 0) {
             fprintf(reader->settings->log, "Error: can't tell if %s is mounted and the option to ignore mount status is not set.\n", device_name);

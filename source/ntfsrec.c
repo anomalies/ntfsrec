@@ -5,7 +5,7 @@
 
 #include "ntfsrec.h"
 #include "ntfs_reader.h"
-#include "ntfs_command.h"
+#include "ntfsrec_command.h"
 #include <locale.h>
 
 int main(int argc, char **argv) {
