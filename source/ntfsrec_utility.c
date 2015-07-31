@@ -9,6 +9,17 @@
 static int ntfsrec_calculate_up_path(char *buffer, size_t max_length, const char *base, const char *path);
 static void ntfsrec_move_up_one(char *base, char **pend);
 
+void *ntfsrec_allocate(size_t length) {
+    void *result = malloc(length);
+    
+    if (result == NULL) {
+        perror("Error (ntfsrec_allocate): out of memory!");
+        abort();
+    }
+    
+    return result;
+}
+
 void ntfsrec_utility_format_size(char *buffer, size_t maxsize, int64_t size_value) {
     static const char *prefixes[] = { "B", "K", "M", "G", "T", "P", "E" };
     int prefix = 0;

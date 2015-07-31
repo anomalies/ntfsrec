@@ -7,6 +7,7 @@
 #include "ntfs_reader.h"
 #include "ntfsrec_command.h"
 #include "ntfsrec_utility.h"
+#include <unistd.h>
 
 static int ntfsrec_split_string_destroy(char *string, char **next, char delimiter);
 static void ntfsrec_remove_newline(char *string);
@@ -17,6 +18,7 @@ extern void ntfsrec_command_cd(struct ntfsrec_command_processor *state, char *ar
 extern void ntfsrec_command_cp(struct ntfsrec_command_processor *state, char *arguments);
 extern void ntfsrec_command_cpz(struct ntfsrec_command_processor *state, char *arguments);
 static void ntfsrec_command_info(struct ntfsrec_command_processor *state, char *arguments);
+static void ntfsrec_command_pwd(struct ntfsrec_command_processor *state, char *arguments);
 static void ntfsrec_command_quit(struct ntfsrec_command_processor *state, char *arguments);
 
 
@@ -27,9 +29,10 @@ static const struct ntfsrec_command_handler {
 } command_handlers[] = {
     { "ls",   "Lists files and folders in a directory",    &ntfsrec_command_ls   },
     { "cd",   "Changes the current directory to <folder>", &ntfsrec_command_cd   },
-    { "cp",   "Copies files from cwd to <destination>",    &ntfsrec_command_cp   },
+    { "cp",   "Copies files from cwd to host <dest>",      &ntfsrec_command_cp   },
     { "cpz",  "Copies files from cwd to <dest> zip file",  &ntfsrec_command_cpz  },
     { "info", "Displays information about the volume",     &ntfsrec_command_info },
+    { "pwd",  "Prints the host working directory",         &ntfsrec_command_pwd  },
     { "quit", "Exits the application.",                    &ntfsrec_command_quit },
     { NULL,   NULL,                                        NULL                  }
 };
@@ -47,7 +50,6 @@ void ntfsrec_process_commands(struct ntfsrec_reader *reader) {
     ntfsrec_command_cd(&state, "/");
     
     while(state.running) {
-        
         char *command = line, *arguments;
         
         printf("%s> ", state.cwd);
@@ -110,6 +112,25 @@ static void ntfsrec_dispatch_command(struct ntfsrec_command_processor *state, ch
 static void ntfsrec_command_info(struct ntfsrec_command_processor *state, char *arguments) {
     NR_UNUSED(state);
     NR_UNUSED(arguments);
+}
+
+static void ntfsrec_command_pwd(struct ntfsrec_command_processor *state, char *arguments) {
+    char * cwd;
+    
+    NR_UNUSED(state);
+    NR_UNUSED(arguments);
+    
+    cwd = getcwd(NULL, 0);
+    
+    if (cwd == NULL) {
+        puts("Error: unable to get current working directory");
+        return;
+    }
+    
+    printf("Host path is: %s\n", cwd);
+    
+    free(cwd);
+    return;
 }
 
 static void ntfsrec_command_quit(struct ntfsrec_command_processor *state, char *arguments) {

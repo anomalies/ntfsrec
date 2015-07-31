@@ -7,6 +7,7 @@
 #include "ntfs_reader.h"
 #include "ntfsrec_command.h"
 #include "ntfsrec_utility.h"
+#include <zip.h>
 
 static void ntfsrec_check_trailing_slash(char *string);
 

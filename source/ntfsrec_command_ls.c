@@ -20,14 +20,10 @@ void ntfsrec_command_ls(struct ntfsrec_command_processor *state, char *arguments
     } else {
         char new_path[MAX_PATH_LENGTH];
         
-        printf("Custom option\n");
         if (ntfsrec_calculate_path(new_path, sizeof new_path, state->cwd, arguments) < MAX_PATH_LENGTH) {
             ntfs_inode *inode = ntfs_pathname_to_inode(state->reader->mount.volume, NULL, new_path);
 
-            printf("Opened inode\n");
-            
             if (inode != NULL) {
-                printf("Listing\n");
                 
                 if (inode->mrec->flags & MFT_RECORD_IS_DIRECTORY) {
                     printf("Listing %s\n", new_path);
