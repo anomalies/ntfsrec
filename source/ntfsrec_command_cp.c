@@ -248,6 +248,9 @@ static int ntfsrec_emit_file(struct ntfsrec_copy *state, ntfs_inode *inode, cons
                     
                     state->stats.errors++;
                     printf("Error: failed %u times to read %s, skipping %d bytes\n", retries, name, actual_size);
+                    
+                    lseek(output_fd, actual_size, SEEK_CUR);
+                    
                     offset += actual_size;
                     continue;
                 }
