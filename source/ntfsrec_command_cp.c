@@ -7,22 +7,22 @@
 #include "ntfs_reader.h"
 #include "ntfsrec_command.h"
 #include "ntfsrec_utility.h"
-#include <dirent.h>
+#include <unistd.h>
 #include <sys/stat.h>
-#include <zip.h>
+#include <fcntl.h>
 
 #define NR_FILE_BUFFER_SIZE 8096
 #define NR_FILE_MAX_RETRIES 4
+
 struct ntfsrec_copy {
     ntfs_volume *volume;
     const char *output_name;
-    struct zip *zipfile;
-    
+
     struct {
-        size_t files;
-        size_t dirs;
-        size_t errors;
-        size_t retries;
+        unsigned int files;
+        unsigned int dirs;
+        unsigned int errors;
+        unsigned int retries;
     } stats;
     
     struct {
@@ -39,40 +39,30 @@ struct ntfsrec_zip_source {
     struct ntfsrec_copy *state;
     ntfs_inode *inode;
     ntfs_attr *data_attr;
-    MFT_REF mft_ref;
     const char *name;
     unsigned int block_size;
     s64 offset;
 };
 
 static int ntfsrec_recurse_directory(struct ntfsrec_copy* state, ntfs_inode* folder_node, const char* name);
-static DIR * ntfsrec_create_or_open(const char *directory);
 static int ntfsrec_cpz_directory_visitor(struct ntfsrec_copy *state, const ntfschar *name,
                                          const int name_len, const int name_type, const s64 pos,
                                          const MFT_REF mref, const unsigned dt_type);
 
-static int ntfsrec_zip_add_file(struct ntfsrec_copy *state, ntfs_inode *inode, const char *name);
-static zip_int64_t ntfsrec_zip_source(struct ntfsrec_zip_source *source, void *data, zip_uint64_t len, enum zip_source_cmd cmd);
 static int ntfsrec_append_filename(struct ntfsrec_copy *state, const char *path, char **old_end);
+static int ntfsrec_emit_file(struct ntfsrec_copy *state, ntfs_inode *inode, const char *name);
 
 void ntfsrec_command_cp(struct ntfsrec_command_processor *state, char *arguments) {
-    NR_UNUSED(state);
-    if (strlen(arguments) == 0) {
-        puts("Usage: cp <host directory>");
-        return;
-    }
-
-    puts("Error: this feature is currently unimplemented.\n");
-    return;
-}
-
-void ntfsrec_command_cpz(struct ntfsrec_command_processor *state, char *arguments) {
+    char dest_path[128];
     struct ntfsrec_copy copy_state;
-    int open_error = 0;
     
-    if (strlen(arguments) == 0) {
-        puts("Usage: cpz <host output zip>");
-        return;
+    if (strlen(arguments) != 0) {
+        if ((size_t)snprintf(dest_path, sizeof dest_path, "./%s", arguments) >= sizeof dest_path) {
+            printf("Error: path %s is too long\n", arguments);
+            return;
+        }
+    } else {
+        strcpy(dest_path, ".");
     }
     
     memset(copy_state.path, 0, sizeof copy_state.path);
@@ -87,38 +77,22 @@ void ntfsrec_command_cpz(struct ntfsrec_command_processor *state, char *argument
     
     copy_state.file_buffer = ntfsrec_allocate(NR_FILE_BUFFER_SIZE);
     
-    copy_state.zipfile = zip_open(arguments, ZIP_CREATE | ZIP_EXCL, &open_error);
-    
-    if (copy_state.zipfile == NULL) {
-        switch(open_error) {
-            case ZIP_ER_EXISTS:
-                printf("Error: output file %s already exists\n", arguments);
-                break;
-                
-            case ZIP_ER_INVAL:
-                printf("Error: invalid path %s\n", arguments);
-                break;
-            
-            case ZIP_ER_OPEN:
-                printf("Error: the file %s could not be opened\n", arguments);
-                break;
-                
-            default:
-                printf("Error: unable to create zip file %s\n", arguments);
-                break;
-        }
-        
-        return;
-    }
-    
     copy_state.current_path_end = copy_state.path;
     
-    ntfsrec_recurse_directory(&copy_state, state->cwd_inode, "\0");
+    ntfsrec_recurse_directory(&copy_state, state->cwd_inode, dest_path);
     
-    printf("Done.\n");
+    printf("Done.\nFiles:\t%u\nDirectories:\t%u\nErrors:\t%u\n", copy_state.stats.files, copy_state.stats.dirs, copy_state.stats.errors);
     
-    zip_close(copy_state.zipfile);
     free(copy_state.file_buffer);
+    return;
+}
+
+void ntfsrec_command_cpz(struct ntfsrec_command_processor *state, char *arguments) {
+    NR_UNUSED(state);
+    NR_UNUSED(arguments);
+    
+    puts("This command isn't implemented.");
+    return;
 }
 
 static int ntfsrec_recurse_directory(struct ntfsrec_copy *state, ntfs_inode *folder_node, const char *name) {
@@ -138,14 +112,15 @@ static int ntfsrec_recurse_directory(struct ntfsrec_copy *state, ntfs_inode *fol
     
     state->current_path_end = &state->current_path_end[name_length];
     
-    printf("Adding directory %s\n", state->path);
-    
-    if (zip_dir_add(state->zipfile, state->path, ZIP_FL_ENC_UTF_8) < 0) {
-        printf("Error: unable to create directory %s in zipfile.\n", state->path);
-        state->current_path_end = old_path_end;
+    if (mkdir(state->path, 0755) != 0) {
+        printf("Error: unable to create directory %s\n", state->path);
+        
         *old_path_end = '\0';
+        state->current_path_end = old_path_end;
         return NR_FALSE;
     }
+    
+    printf("Adding directory %s\n", state->path);
     
     if (ntfs_readdir(folder_node, &position, state, (ntfs_filldir_t)ntfsrec_cpz_directory_visitor) != 0) {
         printf("Error: unable to traverse directory %s\n", state->path);
@@ -200,7 +175,7 @@ static int ntfsrec_cpz_directory_visitor(struct ntfsrec_copy *state, const ntfsc
     inode = ntfs_inode_open(state->volume, mref);
     
     if (inode != NULL) {
-        ntfsrec_zip_add_file(state, inode, local_name);
+        ntfsrec_emit_file(state, inode, local_name);
         ntfs_inode_close(inode);
     } else {
         printf("Error: couldn't open file %s\n", local_name);
@@ -211,115 +186,6 @@ static int ntfsrec_cpz_directory_visitor(struct ntfsrec_copy *state, const ntfsc
     return 0;
 }
 
-static int ntfsrec_zip_add_file(struct ntfsrec_copy *state, ntfs_inode *inode, const char *name) {
-    struct ntfsrec_zip_source source;
-    struct zip_source *zip_source;
-    char *old_path_end;
-    int result = NR_FALSE;
-    
-    memset(&source, 0, sizeof source);
-    source.state = state;
-    source.inode = inode;
-    
-    printf("Adding file %s\n", name);
-    
-    if (ntfsrec_append_filename(state, name, &old_path_end) == NR_FALSE) {
-        printf("Error: current path %s and filename %s are too long.\n", state->path, name);
-        return NR_FALSE;
-    }
-    
-    source.name = state->path;
-    
-    zip_source = zip_source_function(state->zipfile, (zip_source_callback)ntfsrec_zip_source, &source);
-    
-    if (zip_source != NULL) {
-        if (zip_file_add(state->zipfile, state->path, zip_source, ZIP_FL_ENC_UTF_8) >= 0) {
-            state->stats.files++;
-            result = NR_TRUE;
-        } else {
-            zip_source_free(zip_source);
-            printf("Error: unable to add file %s to zip; reason: %s\n", state->path, zip_strerror(state->zipfile));
-        }
-    } else {
-        printf("Error: unable to create zip source for %s\n", state->path);
-    }
-    
-    printf("2 Added file %s\n", state->path);
-    
-    *old_path_end = '\0';
-    state->current_path_end = old_path_end;
-    
-    return result;
-}
-
-static zip_int64_t ntfsrec_zip_source(struct ntfsrec_zip_source *source, void *data, zip_uint64_t len, enum zip_source_cmd cmd) {
-    switch (cmd) {
-        case ZIP_SOURCE_OPEN: {
-            printf("1 Reached callback for open\n");
-            
-            source->data_attr = ntfs_attr_open(source->inode, AT_DATA, NULL, 0);
-            
-            if (source->data_attr == NULL) {
-                printf("Error: can't access the data for %s\n", source->name);
-                return -1;
-            }
-            
-            return 0;
-        }
-        
-        case ZIP_SOURCE_CLOSE: {
-            if (source->data_attr != NULL) {
-                ntfs_attr_close(source->data_attr);
-            }
-            
-            return 0;
-        }
-        
-        case ZIP_SOURCE_READ: {
-            unsigned int retries = 0;
-            s64 bytes_read;
-            
-            for(;;) {
-                bytes_read = ntfs_attr_pread(source->data_attr, source->offset, len, data);
-                
-                if (bytes_read == -1) {
-                    if (retries++ < source->state->opt.retries) {
-                        source->state->stats.retries++;
-                        continue;
-                    }
-                    
-                    source->state->stats.errors++;
-                    printf("Error: failed %u times to read %s, skipping.\n", retries, source->name);
-                    return -1;
-                }
-                
-                break;
-            }
-            
-            return bytes_read;
-        }
-        
-        case ZIP_SOURCE_STAT: {
-            struct zip_stat *stat = data;
-            
-            zip_stat_init(stat);
-            
-            return sizeof stat;
-        }
-        
-        case ZIP_SOURCE_ERROR: {
-            int *errors = data;
-            errors[0] = ZIP_ER_INVAL;
-            errors[1] = EINVAL;
-            return sizeof (int) * 2;
-        }
-        
-        default:
-            break;
-    }
-    
-    return 0;
-}
 
 static int ntfsrec_append_filename(struct ntfsrec_copy *state, const char *path, char **old_end) {
     int remaining_size = MAX_PATH_LENGTH - (state->current_path_end - state->path);
@@ -338,49 +204,73 @@ static int ntfsrec_append_filename(struct ntfsrec_copy *state, const char *path,
     return NR_TRUE;
 }
 
-/*
- static int ntfsrec_zip_add_file(struct ntfsrec_copy *state, ntfs_inode *inode, const char *name) {
+static int ntfsrec_emit_file(struct ntfsrec_copy *state, ntfs_inode *inode, const char *name) {
     ntfs_attr *data_attribute;
+    char *old_path_end;
+    
+    
+    if (ntfsrec_append_filename(state, name, &old_path_end) == NR_FALSE) {
+        printf("Error: path %s and filename %s are too long.\n", state->path, name);
+        return NR_FALSE;
+    }
     
     data_attribute = ntfs_attr_open(inode, AT_DATA, NULL, 0);
-    
+
     if (data_attribute != NULL) {
+        int output_fd;
         unsigned int block_size = 0, retries = 0;
         s64 offset = 0;
         
-        if (inode->mft_no < 2) {
-            block_size = state->volume->mft_record_size;
-        }
+        output_fd = open(state->path, O_WRONLY | O_CREAT);
         
-        for(;;) {
-            s64 bytes_read = 0;
-            
-            if (block_size > 0) {
-                bytes_read = ntfs_attr_mst_pread(data_attribute, offset, 1, block_size, state->file_buffer);
-                bytes_read *= block_size;
-            } else {
-                bytes_read = ntfs_attr_pread(data_attribute, offset, NR_FILE_BUFFER_SIZE, state->file_buffer);
+        if (output_fd != -1) {
+            if (inode->mft_no < 2) {
+                block_size = state->volume->mft_record_size;
             }
             
-            if (bytes_read == -1) {
-                unsigned int actual_size = block_size > 0 ? block_size : NR_FILE_BUFFER_SIZE;
+            for(;;) {
+                s64 bytes_read = 0;
                 
-                if (retries++ < state->opt.retries) {
-                    state->stats.retries++;
+                if (block_size > 0) {
+                    bytes_read = ntfs_attr_mst_pread(data_attribute, offset, 1, block_size, state->file_buffer);
+                    bytes_read *= block_size;
+                } else {
+                    bytes_read = ntfs_attr_pread(data_attribute, offset, NR_FILE_BUFFER_SIZE, state->file_buffer);
+                }
+                
+                if (bytes_read == -1) {
+                    unsigned int actual_size = block_size > 0 ? block_size : NR_FILE_BUFFER_SIZE;
+                    
+                    if (retries++ < state->opt.retries) {
+                        state->stats.retries++;
+                        continue;
+                    }
+                    
+                    state->stats.errors++;
+                    printf("Error: failed %u times to read %s, skipping %d bytes\n", retries, name, actual_size);
+                    offset += actual_size;
                     continue;
                 }
                 
-                state->stats.errors++;
-                printf("Error: failed %u times to read %s, skipping %d bytes\n", retries, name, actual_size);
-                offset += actual_size;
-                continue;
+                if (bytes_read == 0) {
+                    break;
+                }
+                
+                if (write(output_fd, state->file_buffer, bytes_read) < 0) {
+                    printf("Error: unable to write to output file %s\n", state->path);
+                    
+                    if (retries++ < state->opt.retries) {
+                        state->stats.retries++;
+                        continue;
+                    }
+                    
+                    break;
+                }
+                
+                offset += bytes_read;
             }
             
-            if (bytes_read == 0) {
-                break;
-            }
-            
-            offset += bytes_read;
+            close(output_fd);
         }
         
         state->stats.files++;
@@ -388,7 +278,9 @@ static int ntfsrec_append_filename(struct ntfsrec_copy *state, const char *path,
     } else {
         printf("Error: can't access the data for %s\n", name);
     }
-    
+
+    *old_path_end = '\0';
+    state->current_path_end = old_path_end;
     return NR_TRUE;
 }
-*/
+

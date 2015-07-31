@@ -17,6 +17,6 @@ add_executable(ntfsrec
     ntfsrec.c
 )
 
-target_link_libraries(ntfsrec ntfs-3g zip)
+target_link_libraries(ntfsrec ntfs-3g)
 
 install(TARGETS ntfsrec RUNTIME DESTINATION bin)
