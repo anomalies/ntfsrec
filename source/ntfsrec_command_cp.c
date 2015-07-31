@@ -35,15 +35,6 @@ struct ntfsrec_copy {
     char path[MAX_PATH_LENGTH];
 };
 
-struct ntfsrec_zip_source {
-    struct ntfsrec_copy *state;
-    ntfs_inode *inode;
-    ntfs_attr *data_attr;
-    const char *name;
-    unsigned int block_size;
-    s64 offset;
-};
-
 static int ntfsrec_recurse_directory(struct ntfsrec_copy* state, ntfs_inode* folder_node, const char* name);
 static int ntfsrec_cpz_directory_visitor(struct ntfsrec_copy *state, const ntfschar *name,
                                          const int name_len, const int name_type, const s64 pos,
@@ -270,6 +261,7 @@ static int ntfsrec_emit_file(struct ntfsrec_copy *state, ntfs_inode *inode, cons
                     break;
                 }
                 
+                retries = 0;
                 offset += bytes_read;
             }
             
